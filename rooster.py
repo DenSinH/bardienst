@@ -1,15 +1,16 @@
+import itertools as it
 import logging
+import random
 from os import PathLike
 from pathlib import Path
 from typing import Annotated, Any, Iterable
-import itertools as it
-import random
 
 import yaml
 from ortools.sat.python import cp_model
 from pydantic import BaseModel, Field, PrivateAttr
 
 LEDEN_PER_WEEK = 2
+
 
 def make_pair(v1, v2) -> frozenset:
     pair = frozenset((v1, v2))
@@ -26,6 +27,7 @@ class Lid(BaseModel):
 
 
 Clique = Annotated[list[set[str]], Field(default_factory=list)]
+
 
 class Cliques(BaseModel):
     favorieten: Clique
@@ -78,7 +80,6 @@ class Voorkeuren(BaseModel):
                 self.leden[lid].overig.add(other)
                 self.leden[other].overig.add(lid)
 
-
     def _make_symmetric(self):
         """Fix leden mapping by making the favorieten and overig lists symmetric."""
         for name, lid in list(self.leden.items()):
@@ -125,7 +126,6 @@ class Voorkeuren(BaseModel):
                 (self._vars[make_pair(name, other)] for other in lid.candidates())
             )
 
-
         logging.info(
             f"Model heeft {len(model.proto.variables)} variabelen "
             f"en {len(model.proto.constraints)} vergelijkingen"
@@ -153,7 +153,7 @@ class Voorkeuren(BaseModel):
 
         # output schedule
         for pair in pairs:
-            print(", " .join(pair))
+            print(", ".join(pair))
 
         # output unscheduled members
         for name, lid in self.leden.items():
@@ -181,6 +181,7 @@ if __name__ == '__main__':
     model = cp_model.CpModel()
     voorkeuren.construct_problem(model)
 
+
     class SolutionLogger(cp_model.CpSolverSolutionCallback):
 
         def on_solution_callback(self):
@@ -188,6 +189,7 @@ if __name__ == '__main__':
                 f"Oplossing objective value {self.objective_value} "
                 f"en best objective bound {self.best_objective_bound}"
             )
+
 
     solver = cp_model.CpSolver()
     solver.best_bound_callback = lambda bound: logging.info(f"Best objective bound {bound}")
