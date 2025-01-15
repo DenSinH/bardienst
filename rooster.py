@@ -1,25 +1,28 @@
 import logging
 from os import PathLike
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Iterable
 import itertools as it
+import random
 
 import yaml
-from ortools.math_opt.python.solution import Solution
 from ortools.sat.python import cp_model
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, PrivateAttr
 
 LEDEN_PER_WEEK = 2
 
+def make_pair(v1, v2) -> frozenset:
+    pair = frozenset((v1, v2))
+    assert len(pair) == 2
+    return pair
+
 
 class Lid(BaseModel):
-    model_config = ConfigDict(
-        arbitrary_types_allowed=True,
-    )
-
     favorieten: set[str] = Field(default_factory=set)
     overig: set[str] = Field(default_factory=set)
-    vars_: list[cp_model.IntVar] = Field(default_factory=list)
+
+    def candidates(self) -> Iterable[str]:
+        yield from (self.favorieten | self.overig)
 
 
 Clique = Annotated[list[set[str]], Field(default_factory=list)]
@@ -30,9 +33,9 @@ class Cliques(BaseModel):
 
 
 class Voorkeuren(BaseModel):
-    weken: int = Field(default=0)
     cliques: Cliques
     leden: dict[str, Lid | None] = Field(default_factory=dict)
+    _vars: dict[frozenset[str], cp_model.IntVar] = PrivateAttr(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
         logging.info("Voorkeuren repareren...")
@@ -40,8 +43,7 @@ class Voorkeuren(BaseModel):
         self._cliques()
         self._make_symmetric()
         self._promote_favorites()
-        self.weken = len(self.leden) // LEDEN_PER_WEEK
-        logging.info(f"{len(self.leden)} leden, rooster voor {self.weken} weken")
+        logging.info(f"{len(self.leden)} leden")
 
     def _missing_members(self):
         """Create empty members for any missing members"""
@@ -99,66 +101,67 @@ class Voorkeuren(BaseModel):
     def _init_vars(self, model: cp_model.CpModel):
         """Initialize cp model variables for members"""
         for name, lid in self.leden.items():
-            for week in range(self.weken):
-                lid.vars_.append(model.new_bool_var(str((name, week))))
+            for other in lid.candidates():
+                pair = make_pair(name, other)
+                if pair not in self._vars:
+                    self._vars[pair] = model.new_bool_var(str(sorted(pair)))
 
     def construct_problem(self, model: cp_model.CpModel):
         """Construct the problem given the preferences, then return the objective"""
         logging.info("Model aanmaken")
         self._init_vars(model)
 
-        for week in range(self.weken):
-            # 2 members per week have to be scheduled
-            model.add(
-                sum(lid.vars_[week] for lid in self.leden.values()) == LEDEN_PER_WEEK
+        # members can be scheduled at most once
+        for name, lid in self.leden.items():
+            model.add_at_most_one(
+                *(self._vars[make_pair(name, other)] for other in lid.candidates())
             )
 
-            # only schedule together members with other allowed members
-            for name, lid in self.leden.items():
-                # member_scheduled => one of the compatible members scheduled the
-                # same week
-                model.add_bool_or(
-                    *(self.leden[other].vars_[week] for other in lid.favorieten | lid.overig)
-                ).only_enforce_if(lid.vars_[week])
+        is_scheduled: dict[str, cp_model.IntVar] = {}
+        for name, lid in self.leden.items():
+            is_scheduled[name] = model.new_bool_var(f"scheduled: {name}")
+            model.add_max_equality(
+                is_scheduled[name],
+                (self._vars[make_pair(name, other)] for other in lid.candidates())
+            )
 
-        # members can be scheduled at most once
-        for lid in self.leden.values():
-            model.add_at_most_one(lid.vars_)
+
         logging.info(
             f"Model heeft {len(model.proto.variables)} variabelen "
             f"en {len(model.proto.constraints)} vergelijkingen"
         )
 
-        objective = 0
-        for week in range(self.weken):
-            for name, lid in self.leden.items():
-                for other in lid.favorieten:
-                    # are (favorite) members together this week?
-                    together = model.new_bool_var(str((name, other, week)))
+        # HUGE penalty for not scheduling members
+        objective = 100000 * sum(is_scheduled.values())
+        for name, lid in self.leden.items():
+            for other in lid.favorieten:
+                # bunus if favorite members are together
+                objective += self._vars[make_pair(name, other)]
 
-                    # together <=> lid[week] && other[week]
-                    # we then maximize the amount of favorites that work together
-                    model.add_bool_or(
-                        lid.vars_[week].Not(), self.leden[other].vars_[week].Not()
-                    ).only_enforce_if(together.Not())
-                    model.add_bool_and(
-                        lid.vars_[week], self.leden[other].vars_[week]
-                    ).only_enforce_if(together)
-
-                    objective += together
         model.maximize(objective)
 
-    def output_schedule(self, solver: cp_model.CpSolver):
+    def output_schedule(self, solver: cp_model.CpSolver, shuffled: bool = True):
         """Output a single schedule from the solver"""
-        for week in range(self.weken):
-            leden = tuple(
-                name for name, lid in self.leden.items()
-                if solver.value(lid.vars_[week])
-            )
-            print(week, leden)
 
+        # gather formed pairs
+        pairs = [
+            pair for pair, var in self._vars.items()
+            if solver.value(var)
+        ]
+        if shuffled:
+            random.shuffle(pairs)
+
+        # output schedule
+        for pair in pairs:
+            print(", " .join(pair))
+
+        # output unscheduled members
         for name, lid in self.leden.items():
-            if not any(solver.value(lid.vars_[week]) for week in range(self.weken)):
+            is_scheduled = any(
+                solver.value(self._vars[frozenset((name, other))])
+                for other in lid.candidates()
+            )
+            if not is_scheduled:
                 print(name, "is niet ingeroosterd")
 
 
