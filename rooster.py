@@ -9,8 +9,6 @@ import yaml
 from ortools.sat.python import cp_model
 from pydantic import BaseModel, Field, PrivateAttr
 
-LEDEN_PER_WEEK = 2
-
 
 def make_pair(v1, v2) -> frozenset:
     pair = frozenset((v1, v2))
