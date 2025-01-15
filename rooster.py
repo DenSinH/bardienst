@@ -1,10 +1,11 @@
 import logging
-from collections import defaultdict
 from os import PathLike
 from pathlib import Path
 from typing import Annotated, Any
+import itertools as it
 
 import yaml
+from ortools.math_opt.python.solution import Solution
 from ortools.sat.python import cp_model
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -21,13 +22,22 @@ class Lid(BaseModel):
     vars_: list[cp_model.IntVar] = Field(default_factory=list)
 
 
+Clique = Annotated[list[set[str]], Field(default_factory=list)]
+
+class Cliques(BaseModel):
+    favorieten: Clique
+    overig: Clique
+
+
 class Voorkeuren(BaseModel):
     weken: int = Field(default=0)
-    leden: dict[str, Lid] = Field(default_factory=dict)
+    cliques: Cliques
+    leden: dict[str, Lid | None] = Field(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
         logging.info("Voorkeuren repareren...")
         self._missing_members()
+        self._cliques()
         self._make_symmetric()
         self._promote_favorites()
         self.weken = len(self.leden) // LEDEN_PER_WEEK
@@ -35,11 +45,37 @@ class Voorkeuren(BaseModel):
 
     def _missing_members(self):
         """Create empty members for any missing members"""
-        for lid in list(self.leden.values()):
-            for other in lid.favorieten | lid.overig:
-                if other not in self.leden:
-                    logging.info(f"Voeg missend lid '{other}' toe")
-                    self.leden[other] = Lid()
+        leden = set(self.leden)
+
+        # repair 'empty' members
+        for name in leden:
+            if self.leden[name] is None:
+                self.leden[name] = Lid()
+
+        for name, lid in self.leden.items():
+            leden |= lid.favorieten | lid.overig
+        for clique in self.cliques.favorieten:
+            leden |= clique
+        for clique in self.cliques.overig:
+            leden |= clique
+
+        for name in leden:
+            if name not in self.leden:
+                logging.info(f"Voeg missend lid '{name}' toe")
+                self.leden[name] = Lid()
+
+    def _cliques(self):
+        """Add people from cliques to each others preferences"""
+        for clique in self.cliques.favorieten:
+            for lid, other in it.permutations(clique, 2):
+                self.leden[lid].favorieten.add(other)
+                self.leden[other].favorieten.add(lid)
+
+        for clique in self.cliques.overig:
+            for lid, other in it.permutations(clique, 2):
+                self.leden[lid].overig.add(other)
+                self.leden[other].overig.add(lid)
+
 
     def _make_symmetric(self):
         """Fix leden mapping by making the favorieten and overig lists symmetric."""
@@ -66,7 +102,7 @@ class Voorkeuren(BaseModel):
             for week in range(self.weken):
                 lid.vars_.append(model.new_bool_var(str((name, week))))
 
-    def construct_problem(self, model: cp_model.CpModel) -> cp_model.LinearExpr:
+    def construct_problem(self, model: cp_model.CpModel):
         """Construct the problem given the preferences, then return the objective"""
         logging.info("Model aanmaken")
         self._init_vars(model)
@@ -110,7 +146,7 @@ class Voorkeuren(BaseModel):
                     ).only_enforce_if(together)
 
                     objective += together
-        return objective
+        model.maximize(objective)
 
     def output_schedule(self, solver: cp_model.CpSolver):
         """Output a single schedule from the solver"""
@@ -119,12 +155,11 @@ class Voorkeuren(BaseModel):
                 name for name, lid in self.leden.items()
                 if solver.value(lid.vars_[week])
             )
-            print(week, *leden)
+            print(week, leden)
 
         for name, lid in self.leden.items():
             if not any(solver.value(lid.vars_[week]) for week in range(self.weken)):
                 print(name, "is niet ingeroosterd")
-
 
 
 def load_preferences(filename: PathLike | str) -> Voorkeuren:
@@ -139,13 +174,24 @@ if __name__ == '__main__':
         level=logging.DEBUG,
         format="[%(asctime)s %(levelname)-8s] %(message)s",
     )
-    voorkeuren = load_preferences("voorkeuren.example.yml")
+    voorkeuren = load_preferences("voorkeuren.yml")
     model = cp_model.CpModel()
-    objective = voorkeuren.construct_problem(model)
+    voorkeuren.construct_problem(model)
+
+    class SolutionLogger(cp_model.CpSolverSolutionCallback):
+
+        def on_solution_callback(self):
+            logging.info(
+                f"Oplossing objective value {self.objective_value} "
+                f"en best objective bound {self.best_objective_bound}"
+            )
 
     solver = cp_model.CpSolver()
-    status = solver.solve(model)
-    if status != cp_model.OPTIMAL:
+    solver.best_bound_callback = lambda bound: logging.info(f"Best objective bound {bound}")
+    solver.parameters.max_time_in_seconds = 20
+    status = solver.solve(model, SolutionLogger())
+
+    if status not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
         raise Exception("Kan geen rooster maken met deze instellingen...")
 
     voorkeuren.output_schedule(solver)
