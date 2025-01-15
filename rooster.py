@@ -32,7 +32,7 @@ class Cliques(BaseModel):
     overig: Clique
 
 
-class Voorkeuren(BaseModel):
+class Vereniging(BaseModel):
     cliques: Cliques
     leden: dict[str, Lid | None] = Field(default_factory=dict)
     _vars: dict[frozenset[str], cp_model.IntVar] = PrivateAttr(default_factory=dict)
@@ -163,11 +163,11 @@ class Voorkeuren(BaseModel):
                 print(name, "is niet ingeroosterd")
 
 
-def load_preferences(filename: PathLike | str) -> Voorkeuren:
+def load_association(filename: PathLike | str) -> Vereniging:
     """Load preferences from a file"""
     logging.info(f"Voorkeuren laden van {Path(filename).absolute()}")
     with Path(filename).open("r") as f:
-        return Voorkeuren(**yaml.safe_load(f))
+        return Vereniging(**yaml.safe_load(f))
 
 
 if __name__ == '__main__':
@@ -175,9 +175,9 @@ if __name__ == '__main__':
         level=logging.DEBUG,
         format="[%(asctime)s %(levelname)-8s] %(message)s",
     )
-    voorkeuren = load_preferences("voorkeuren.yml")
+    vereniging = load_association("voorkeuren.yml")
     model = cp_model.CpModel()
-    voorkeuren.construct_problem(model)
+    vereniging.construct_problem(model)
 
 
     class SolutionLogger(cp_model.CpSolverSolutionCallback):
@@ -200,4 +200,4 @@ if __name__ == '__main__':
     if status not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
         raise Exception("Kan geen rooster maken met deze instellingen...")
 
-    voorkeuren.output_schedule(solver)
+    vereniging.output_schedule(solver)
