@@ -192,6 +192,9 @@ if __name__ == '__main__':
     solver = cp_model.CpSolver()
     solver.best_bound_callback = lambda bound: logging.info(f"Best objective bound {bound}")
     solver.parameters.max_time_in_seconds = 20
+    solver.parameters.permute_variable_randomly = True
+    solver.parameters.randomize_search = True
+    solver.parameters.permute_variable_randomly = True
     status = solver.solve(model, SolutionLogger())
 
     if status not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:

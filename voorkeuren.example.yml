@@ -1,3 +1,10 @@
+cliques:
+  favorieten:
+    - [ dennis, martijn, jord ]
+  overig:
+    - [ martijn, erna, doloris, miranda ]
+
+
 leden:
   dennis:
     favorieten:
