@@ -1,0 +1,3 @@
+ortools>=9.11.4210
+pydantic>=2.10.5
+PyYAML>=6.0.2

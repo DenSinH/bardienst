@@ -1,0 +1,17 @@
+leden:
+  dennis:
+    favorieten:
+      - martijn
+      - jord
+    overig:
+      - henk
+  martijn:
+    favorieten:
+      - jord
+    overig:
+      - dennis  # dennis wordt automatisch gepromoveerd tot favoriet vanuit 'dennis.favorieten'
+      - erna  # erna wordt automatisch aangemaakt
+  jord:
+    favorieten:
+      - dennis
+      # martijn wordt automatisch toegevoegd vanuit 'martijn.favorieten'
