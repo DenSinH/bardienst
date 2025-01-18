@@ -33,6 +33,9 @@ class Cliques(BaseModel):
 
 
 class Vereniging(BaseModel):
+    laatste: list[list[str]] = Field(default_factory=list, description="Laaste bardiensten")
+    pauze: int = Field(default=0, description="Aantal weken sinds laatste bardienst")
+    manual: list[list[str]] = Field(default_factory=list, description="Handmatig ingestelde paren")
     cliques: Cliques
     leden: dict[str, Lid | None] = Field(default_factory=dict)
     _vars: dict[frozenset[str], cp_model.IntVar] = PrivateAttr(default_factory=dict)
@@ -116,6 +119,10 @@ class Vereniging(BaseModel):
                 *(self._vars[make_pair(name, other)] for other in lid.candidates())
             )
 
+        # manually added pairs are forced together
+        for pair in self.manual:
+            model.add(self._vars[make_pair(*pair)] == 1)
+
         is_scheduled: dict[str, cp_model.IntVar] = {}
         for name, lid in self.leden.items():
             is_scheduled[name] = model.new_bool_var(f"scheduled: {name}")
@@ -149,8 +156,25 @@ class Vereniging(BaseModel):
         if shuffled:
             random.shuffle(pairs)
 
-        # output schedule
+        ordered = []
         for pair in pairs:
+            # don't schedule people from their last services too quickly
+            # just don't append any pairs with a person that had a recent service
+            # then we just add them after
+            if len(ordered) < self.pauze:
+                if any(member in last for last in self.laatste for member in pair):
+                    continue
+                ordered.append(pair)
+            else:
+                break
+
+        # add leftover pairs
+        for pair in pairs:
+            if pair not in ordered:
+                ordered.append(pair)
+
+        # output schedule
+        for pair in ordered:
             print(", ".join(pair))
 
         # output unscheduled members
